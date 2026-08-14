@@ -1,5 +1,5 @@
 {
-  "domain": "rol_roi_steel_door",
+  "domain": "rolroi",
   "name": "ROL-ROI Steel Door",
   "codeowners": [],
   "config_flow": true,
