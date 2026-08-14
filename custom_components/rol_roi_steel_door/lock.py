@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
-from homeassistant.components.lock import LockEntity, LockEntityFeature
+from homeassistant.components.lock import LockEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -13,7 +13,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     async_add_entities(entities)
 
 class HunonicDoorLock(LockEntity):
-    _attr_supported_features = LockEntityFeature.OPEN
     _attr_has_entity_name = True
 
     def __init__(self, hass: HomeAssistant, client: HunonicAPIClient, device_id: str, info: dict[str, Any]) -> None:
