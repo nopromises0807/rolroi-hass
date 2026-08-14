@@ -482,6 +482,20 @@ class HunonicAPIClient:
             except (TypeError, ValueError):
                 pass
 
+        # APK fields for device information.
+        # Wi-Fi: ssid
+        # Bluetooth: blever.sw.build on newer firmware, otherwise ver
+        if data.get("ssid") not in (None, ""):
+            state["wifi_ssid"] = str(data.get("ssid"))
+
+        blever = data.get("blever")
+        if isinstance(blever, dict):
+            ble_sw = blever.get("sw")
+            if isinstance(ble_sw, dict) and ble_sw.get("build") not in (None, ""):
+                state["bluetooth_version"] = str(ble_sw.get("build"))
+        if state.get("bluetooth_version") in (None, "") and data.get("ver") not in (None, ""):
+            state["bluetooth_version"] = str(data.get("ver"))
+
         # APK field: pcnslot = "Cleft open" percentage for advanced rolling doors.
         if data.get("pcnslot") is not None:
             try:
