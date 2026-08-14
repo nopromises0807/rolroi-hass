@@ -4,7 +4,7 @@
   "codeowners": [],
   "config_flow": true,
   "icon": "icon.png",
-  "documentation": "https://api.hunonicpro.com",
+  "documentation": "https://github.com/nopromises0807/rolroi-hass",
   "requirements": [
     "paho-mqtt==2.1.0"
   ],
