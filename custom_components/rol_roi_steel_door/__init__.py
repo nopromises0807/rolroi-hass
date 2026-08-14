@@ -562,9 +562,21 @@ class HunonicAPIClient:
             except Exception as err:
                 _LOGGER.debug("State listener failed: %s", err)
 
+    async def _publish_raw_info_command(self, device_id: str, action: int) -> bool:
+        """Send APK-exact information request: {\"sdr\": N}."""
+        device = self.devices.get(str(device_id))
+        if not device:
+            _LOGGER.error("Door %s is not present in device list", device_id)
+            return False
+        payload = json.dumps({"sdr": action}, separators=(",", ":"))
+        return await self.mqtt.publish_command(device, payload)
+
     async def _request_device_info_commands(self, device_id: str) -> None:
-        await self._send_command(device_id, 102)
-        await self._send_command(device_id, 103)
+        # The APK sends these requests WITHOUT user/source fields. Adding them
+        # can make firmware ignore the request, which is why the previous
+        # implementation did not return information.
+        await self._publish_raw_info_command(device_id, 102)
+        await self._publish_raw_info_command(device_id, 103)
 
     def _request_all_status(self) -> None:
         async def _run():
@@ -597,8 +609,14 @@ class HunonicAPIClient:
         return await self._send_command(device_id, action) if action is not None else False
 
     async def request_status(self, device_id: str) -> bool:
+        # Door status uses the normal user/source command. Information requests
+        # must match the APK exactly: {\"sdr\":100} (and 105 for newer door types).
         ok = await self._send_command(device_id, 9)
-        await self._send_command(device_id, 100)
+        await self._publish_raw_info_command(device_id, 100)
+        device = self.devices.get(str(device_id), {})
+        root_type = str(device.get("root_type") or device.get("type") or "")
+        if root_type in {"sdoor4", "sdoorqv", "sdoorqv2"}:
+            await self._publish_raw_info_command(device_id, 105)
         return ok
 
     async def async_refresh(self) -> None:
