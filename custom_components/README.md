@@ -1,34 +1,14 @@
-# ROL-ROI Steel Door 2.1.0
+## Hướng dẫn cài đặt
 
-This version corrects the Cloud authentication to match the original APK:
-- POST `/v3/user/login` is multipart/form-data, not JSON.
-- APK signature is included in every POST.
-- Device-list GET includes the same signature.
-- Door control uses MQTT WebSocket `ws://<mqtt-server>:8080/ws`.
-- Door commands are AES-CBC encrypted using the APK `keyById()/ivById()` algorithm.
-- Cloud device hierarchy is flattened from house -> rooms -> devices.
+**Bước 1:** Thêm kho lưu trữ `https://github.com/nopromises0807/rolroi-hass` vào HACS.
 
-Install as `/config/custom_components/rol_roi_steel_door/` and remove the older copy first.
+**Bước 2:** Cài đặt như bình thường. Ưu tiên chọn phiên bản cao nhất để tránh lỗi.
 
+**Bước 3:** Vào **Thiết bị và dịch vụ** → **Thêm bộ tích hợp** → chọn **ROL-ROI Steel Door**.
 
-## v2.1.2 control fix
-The door command payload now matches the APK: `{ "sdr": <1..5>, "u": <user_id>, "src": 1 }`, and all APK door root types sdoor1..sdoor5 are accepted. MQTT publish remains binary AES-CBC ciphertext to the device `topicsub`.
+**Bước 4:** Nhập SĐT và mật khẩu phù hợp.
 
+> ⚠️ **Lưu ý:** Nên sử dụng tài khoản phụ để tránh bị đăng xuất khi đăng nhập trên HASS.
 
-## v2.1.4
-- Sync `pcnslot` (ô thoáng) from MQTT.
-- Keep the cover open/closable when main shutter is at 0% but the cleft is still open.
-- Add a dedicated `Ô thoáng` percentage sensor.
-
-- v2.1.5: use effective cover position = max(main door %, cleft %) so HA does not show the shutter as closed while the advanced opening is still active.
-
-- v2.1.6: keep OPEN/CLOSE actions available at all reported positions.
-
-- v2.1.7: display main door % and vent/cleft % directly in the cover control entity name.
-
-- v2.1.8: fixed cover.py syntax and replaces the standard state text with 'Cửa X% | Ô thoáng Y%'.
-
-- v2.1.9: remove HA's automatic trailing ' · NN%' from the custom cover state display.
-
-## v2.2.3
-- hiện % cửa, ô thoáng
+🎉 **Cuối cùng, tận hưởng thành quả!**
+<img width="512" height="512" alt="icon" src="https://github.com/user-attachments/assets/4220c12e-0e0e-46b5-9e6a-bd790b93872d" />
