@@ -1,5 +1,3 @@
-# rolroi-hass
-Control Rol-roi Steel Door rolling shutters from Home Assistant.
 ROL-ROI Steel Door 2.1.0
 This version corrects the Cloud authentication to match the original APK:
 
