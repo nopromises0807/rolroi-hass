@@ -3,6 +3,7 @@
   "name": "ROL-ROI Steel Door",
   "codeowners": [],
   "config_flow": true,
+  "icon": "icon.png",
   "documentation": "https://api.hunonicpro.com",
   "requirements": [
     "paho-mqtt==2.1.0"
