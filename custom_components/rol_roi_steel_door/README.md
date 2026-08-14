@@ -11,4 +11,5 @@
 > ⚠️ **Lưu ý:** Nên sử dụng tài khoản phụ để tránh bị đăng xuất khi đăng nhập trên HASS.
 
 🎉 **Cuối cùng, tận hưởng thành quả!**
+
 <img width="512" height="512" alt="icon" src="https://github.com/user-attachments/assets/4220c12e-0e0e-46b5-9e6a-bd790b93872d" />
