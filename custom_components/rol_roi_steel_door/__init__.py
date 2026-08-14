@@ -470,6 +470,70 @@ class HunonicAPIClient:
         did = str(device.get("id"))
         state = self.device_states.setdefault(did, {})
         action = data.get("sdr")
+
+        # APK protocol: 100/105 asks Wi-Fi info; the APK then asks 102 (ESP)
+        # and 103 (Bluetooth) so it can display firmware/hardware details.
+        if action in (100, 105):
+            if data.get("ssid") not in (None, ""):
+                state["wifi_ssid"] = str(data.get("ssid"))
+            self.hass.async_create_task(self._request_device_info_commands(did))
+
+        if action == 102:
+            espver = data.get("espver")
+            if isinstance(espver, str):
+                try:
+                    espver = json.loads(espver)
+                except (TypeError, ValueError):
+                    espver = None
+            if isinstance(espver, dict):
+                state["esp_version"] = espver
+                hw = espver.get("hw")
+                if isinstance(hw, dict):
+                    value = hw.get("ver") or hw.get("build")
+                    if value not in (None, ""):
+                        state["hardware_version"] = str(value)
+                sw = espver.get("sw")
+                if isinstance(sw, dict):
+                    value = sw.get("build") or sw.get("ver")
+                    if value not in (None, ""):
+                        state["esp_software_version"] = str(value)
+
+            fw_extra = data.get("fw_extra")
+            if isinstance(fw_extra, str):
+                try:
+                    fw_extra = json.loads(fw_extra)
+                except (TypeError, ValueError):
+                    fw_extra = None
+            if isinstance(fw_extra, dict):
+                state["fw_extra"] = fw_extra
+                hw = fw_extra.get("hw")
+                if isinstance(hw, dict):
+                    value = hw.get("ver") or hw.get("build")
+                    if value not in (None, ""):
+                        state["hardware_version"] = str(value)
+
+        if action == 103:
+            blever = data.get("blever")
+            if isinstance(blever, str):
+                try:
+                    blever = json.loads(blever)
+                except (TypeError, ValueError):
+                    blever = None
+            if isinstance(blever, dict):
+                state["ble_version_info"] = blever
+                sw = blever.get("sw")
+                if isinstance(sw, dict):
+                    value = sw.get("build") or sw.get("ver")
+                    if value not in (None, ""):
+                        state["bluetooth_version"] = str(value)
+                hw = blever.get("hw")
+                if isinstance(hw, dict) and state.get("hardware_version") in (None, ""):
+                    value = hw.get("ver") or hw.get("build")
+                    if value not in (None, ""):
+                        state["hardware_version"] = str(value)
+            if state.get("bluetooth_version") in (None, "") and data.get("ver") not in (None, ""):
+                state["bluetooth_version"] = str(data.get("ver"))
+
         if action == 4:
             state["locked"] = True
         elif action in (5, 3):
@@ -482,7 +546,6 @@ class HunonicAPIClient:
             except (TypeError, ValueError):
                 pass
 
-        # APK field: pcnslot = "Cleft open" percentage for advanced rolling doors.
         if data.get("pcnslot") is not None:
             try:
                 state["cleft_position"] = max(0, min(100, int(data.get("pcnslot"))))
@@ -492,14 +555,16 @@ class HunonicAPIClient:
             state["position"] = 100
         elif action == 2:
             state["position"] = 0
-            # Do not overwrite pcnslot here. The APK reports the real
-            # advanced-door slot percentage through MQTT status.
         state["available"] = True
         for listener in list(self._listeners.get(did, set())):
             try:
                 listener(state)
             except Exception as err:
                 _LOGGER.debug("State listener failed: %s", err)
+
+    async def _request_device_info_commands(self, device_id: str) -> None:
+        await self._send_command(device_id, 102)
+        await self._send_command(device_id, 103)
 
     def _request_all_status(self) -> None:
         async def _run():
@@ -532,7 +597,9 @@ class HunonicAPIClient:
         return await self._send_command(device_id, action) if action is not None else False
 
     async def request_status(self, device_id: str) -> bool:
-        return await self._send_command(device_id, 9)
+        ok = await self._send_command(device_id, 9)
+        await self._send_command(device_id, 100)
+        return ok
 
     async def async_refresh(self) -> None:
         try:
