@@ -125,6 +125,13 @@ class HunonicDoorCover(CoverEntity):
                     f"Ô thoáng {self._cleft_position}%"
                 )
 
+        state = self._client.device_states.get(str(self._device_id), {})
+        hw = state.get("hardware_version")
+        sw = state.get("esp_software_version")
+        if hw not in (None, ""):
+            self._attr_device_info["hw_version"] = str(hw)
+        if sw not in (None, ""):
+            self._attr_device_info["sw_version"] = str(sw)
         self.async_write_ha_state()
 
     @property

@@ -9,6 +9,6 @@
     "paho-mqtt==2.1.0"
   ],
   "dependencies": [],
-  "version": "2.2.4",
+  "version": "2.2.3",
   "iot_class": "cloud_push"
 }
