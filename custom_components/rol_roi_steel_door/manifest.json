@@ -3,12 +3,10 @@
   "name": "ROL-ROI Steel Door",
   "codeowners": [],
   "config_flow": true,
-  "icon": "icon.png",
-  "documentation": "https://github.com/thangnguyen0807/rolroi-hass",
+  "documentation": "thangnguyen0807/rolroi-hasss",
   "requirements": [
     "paho-mqtt==2.1.0"
   ],
-  "dependencies": [],
-  "version": "2.2.3.1",
+  "version": "2.2.3",
   "iot_class": "cloud_push"
 }
