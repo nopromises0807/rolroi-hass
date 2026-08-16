@@ -4,7 +4,7 @@
   "codeowners": [],
   "config_flow": true,
   "icon": "icon.png",
-  "documentation": "https://github.com/nopromises0807/rolroi-hass",
+  "documentation": "https://github.com/thangnguyen0807/rolroi-hass",
   "requirements": [
     "paho-mqtt==2.1.0"
   ],
