@@ -137,6 +137,28 @@ class HunonicDoorCover(CoverEntity):
         if self._attr_current_cover_position is not None:
             attrs["effective_position"] = self._attr_current_cover_position
         attrs["locked"] = self._is_locked
+
+        # Preserve the device information collected by the v2.2.2_info_fixed
+        # protocol layer.
+        state = self._client.device_states.get(str(self._device_id), {})
+        for key in (
+            "wifi_ssid",
+            "hardware_version",
+            "esp_software_version",
+            "bluetooth_version",
+            "esp_version",
+            "ble_version_info",
+            "fw_extra",
+        ):
+            value = state.get(key)
+            if value not in (None, ""):
+                attrs[key] = value
+
+        for key in ("home_name", "room_name", "home_id", "room_id", "root_id"):
+            value = self._info.get(key)
+            if value not in (None, ""):
+                attrs[key] = value
+
         return attrs
 
     def set_locked(self, locked: bool) -> None:

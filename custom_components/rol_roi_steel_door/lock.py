@@ -92,5 +92,27 @@ class HunonicDoorLock(LockEntity):
             self._notify_cover_lock(False)
             self.async_write_ha_state()
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        state = self._client.device_states.get(str(self._device_id), {})
+        attrs: dict[str, Any] = {}
+        for key in (
+            "wifi_ssid",
+            "hardware_version",
+            "esp_software_version",
+            "bluetooth_version",
+            "esp_version",
+            "ble_version_info",
+            "fw_extra",
+        ):
+            value = state.get(key)
+            if value not in (None, ""):
+                attrs[key] = value
+        for key in ("home_name", "room_name", "home_id", "room_id", "root_id"):
+            value = self._info.get(key)
+            if value not in (None, ""):
+                attrs[key] = value
+        return attrs
+
     async def async_update(self) -> None:
         await self._client.request_status(self._device_id)
