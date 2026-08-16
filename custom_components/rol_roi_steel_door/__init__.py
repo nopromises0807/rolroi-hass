@@ -211,13 +211,22 @@ class HunonicMQTT:
         _LOGGER.info("Hunonic MQTT connected")
         for device in self.client.devices.values():
             self._subscribe_device(device)
-        self.hass.loop.call_soon_threadsafe(self.client._mqtt_connected_changed, True)
-        self.hass.loop.call_soon_threadsafe(self.client._request_all_status)
+        if not self.client._stopping:
+            self.hass.loop.call_soon_threadsafe(
+                self.client._mqtt_connected_changed, True
+            )
+            self.hass.loop.call_soon_threadsafe(self.client._request_all_status)
 
     def _on_disconnect(self, _client, _userdata, rc, properties=None):
         self.connected = False
-        _LOGGER.warning("Hunonic MQTT disconnected rc=%s", rc)
-        self.hass.loop.call_soon_threadsafe(self.client._mqtt_connected_changed, False)
+        if rc == 0:
+            _LOGGER.info("Hunonic MQTT disconnected normally")
+        else:
+            _LOGGER.warning("Hunonic MQTT disconnected rc=%s", rc)
+        if not self.client._stopping:
+            self.hass.loop.call_soon_threadsafe(
+                self.client._mqtt_connected_changed, False
+            )
 
     def _subscribe_device(self, device: dict[str, Any]) -> None:
         if not self._mqtt or not self.connected:
@@ -323,6 +332,11 @@ class HunonicAPIClient:
         self.mqtt_server: dict[str, Any] | None = None
         self.mqtt = HunonicMQTT(hass, self)
         self._unsub_refresh = None
+        self._stopping = False
+        self._refresh_lock = asyncio.Lock()
+        self._auth_lock = asyncio.Lock()
+        self._auth_retry_after = 0.0
+        self._session_reauth_delay = 60.0
 
     def _base_url(self, host: str) -> str:
         return f"https://{host}:{self.api_port}" if self.api_port != 443 else f"https://{host}"
@@ -359,51 +373,115 @@ class HunonicAPIClient:
             return resp.status, data, raw
 
     async def authenticate(self) -> bool:
-        params = {
-            "phone": self.phone,
-            "password": md5_password(self.password),
-            "app_name": APP_NAME,
-            "app_role": APP_ROLE,
-            "is_pro_app": IS_PRO_APP,
-        }
-        _LOGGER.debug("Hunonic login request phone=%s app_name=%s app_role=%s is_pro_app=%s", self.phone, APP_NAME, APP_ROLE, IS_PRO_APP)
-        for host in [self.api_host, "api2.hunonicpro.com"]:
-            self.api_host = host
-            self.base_url = self._base_url(host)
-            try:
-                status, data, raw = await self._post_form("user/login", params, retry=False)
-                if status != 200 or not isinstance(data, dict):
-                    _LOGGER.error("Hunonic login failed HTTP=%s response=%s", status, raw[:1000])
-                    continue
-                if data.get("status") is not True:
-                    _LOGGER.error("Hunonic login rejected: message=%s error_code=%s", data.get("message"), data.get("error_code"))
-                    # 1026 is normally signature/request validation; don't retry the same bad payload on api2.
-                    return False
-                user = data.get("data")
-                token = user.get("token_id") if isinstance(user, dict) else None
-                if not token:
-                    _LOGGER.error("Hunonic login succeeded but token_id is missing: %s", data)
-                    return False
-                self.user = user
-                self.user_id = str(user.get("id")) if user.get("id") is not None else None
-                self.token_id = str(token)
-                _LOGGER.info("Hunonic Cloud login OK, user_id=%s", self.user_id)
-                return True
-            except Exception as err:
-                _LOGGER.warning("Hunonic login request to %s failed: %s", host, err)
-        return False
+        now = asyncio.get_running_loop().time()
+        if now < self._auth_retry_after:
+            return False
+
+        async with self._auth_lock:
+            now = asyncio.get_running_loop().time()
+            if now < self._auth_retry_after:
+                return False
+
+            params = {
+                "phone": self.phone,
+                "password": md5_password(self.password),
+                "app_name": APP_NAME,
+                "app_role": APP_ROLE,
+                "is_pro_app": IS_PRO_APP,
+            }
+            _LOGGER.debug(
+                "Hunonic login request phone=%s app_name=%s app_role=%s is_pro_app=%s",
+                self.phone, APP_NAME, APP_ROLE, IS_PRO_APP,
+            )
+
+            for host in [self.api_host, "api2.hunonicpro.com"]:
+                if host == "api2.hunonicpro.com" and self.api_host == "api2.hunonicpro.com":
+                    # Avoid retrying the same host twice.
+                    if host == self.api_host and self.api_host != "api.hunonicpro.com":
+                        continue
+                self.api_host = host
+                self.base_url = self._base_url(host)
+                try:
+                    status, data, raw = await self._post_form(
+                        "user/login", params, retry=False
+                    )
+                    if status != 200 or not isinstance(data, dict):
+                        _LOGGER.error(
+                            "Hunonic login failed HTTP=%s response=%s",
+                            status, raw[:1000],
+                        )
+                        continue
+
+                    if data.get("status") is not True:
+                        _LOGGER.error(
+                            "Hunonic login rejected: message=%s error_code=%s",
+                            data.get("message"), data.get("error_code"),
+                        )
+                        self._auth_retry_after = now + self._session_reauth_delay
+                        return False
+
+                    user = data.get("data")
+                    token = user.get("token_id") if isinstance(user, dict) else None
+                    if not token:
+                        _LOGGER.error(
+                            "Hunonic login succeeded but token_id is missing: %s", data
+                        )
+                        self._auth_retry_after = now + self._session_reauth_delay
+                        return False
+
+                    self.user = user
+                    self.user_id = (
+                        str(user.get("id")) if user.get("id") is not None else None
+                    )
+                    self.token_id = str(token)
+                    self._auth_retry_after = 0.0
+                    _LOGGER.info("Hunonic Cloud login OK, user_id=%s", self.user_id)
+                    return True
+
+                except Exception as err:
+                    _LOGGER.warning(
+                        "Hunonic login request to %s failed: %s", host, err
+                    )
+
+            self._auth_retry_after = now + self._session_reauth_delay
+            return False
 
     async def get_devices(self) -> list[dict[str, Any]]:
         if not self.token_id and not await self.authenticate():
             raise ConfigEntryAuthFailed("Unable to authenticate with Hunonic")
-        status, data, raw = await self._get_signed("device/listDeviceByHome", {"token_id": self.token_id})
+
+        status, data, raw = await self._get_signed(
+            "device/listDeviceByHome", {"token_id": self.token_id}
+        )
         if status != 200 or not isinstance(data, dict):
-            raise ConfigEntryNotReady(f"Hunonic device list HTTP {status}: {raw[:500]}")
+            raise ConfigEntryNotReady(
+                f"Hunonic device list HTTP {status}: {raw[:500]}"
+            )
+
         if data.get("status") is not True:
             if data.get("error_code") == 40:
+                # Token expired. Re-authenticate once immediately; authenticate()
+                # itself is protected by a lock and cooldown.
                 self.token_id = None
-                raise ConfigEntryAuthFailed("Hunonic session expired")
-            raise ConfigEntryNotReady(f"Hunonic device list rejected: {data.get('message')}")
+                self.user = None
+                self.user_id = None
+                if not await self.authenticate():
+                    raise ConfigEntryNotReady(
+                        "Hunonic session expired; re-authentication is throttled"
+                    )
+
+                status, data, raw = await self._get_signed(
+                    "device/listDeviceByHome", {"token_id": self.token_id}
+                )
+                if status != 200 or not isinstance(data, dict) or data.get("status") is not True:
+                    raise ConfigEntryNotReady(
+                        "Hunonic session re-authenticated but device list refresh failed"
+                    )
+            else:
+                raise ConfigEntryNotReady(
+                    f"Hunonic device list rejected: {data.get('message')}"
+                )
+
         flat: list[dict[str, Any]] = []
         for home in data.get("data") or []:
             if not isinstance(home, dict):
@@ -414,7 +492,9 @@ class HunonicAPIClient:
                 for device in room.get("devices") or []:
                     if not isinstance(device, dict):
                         continue
-                    root_type = str(device.get("root_type") or device.get("type") or "")
+                    root_type = str(
+                        device.get("root_type") or device.get("type") or ""
+                    )
                     if root_type not in DOOR_ROOT_TYPES:
                         continue
                     d = dict(device)
@@ -424,10 +504,16 @@ class HunonicAPIClient:
                     d["room_name"] = room.get("name")
                     d["root_id"] = d.get("root_id") or d.get("id")
                     flat.append(d)
-        self.devices = {str(d["id"]): d for d in flat if d.get("id") is not None}
+
+        self.devices = {
+            str(d["id"]): d for d in flat if d.get("id") is not None
+        }
         for d in self.devices.values():
             self.device_states.setdefault(str(d["id"]), {})
-        _LOGGER.info("Hunonic Cloud synced: %s ROL-ROI door(s)", len(self.devices))
+
+        _LOGGER.info(
+            "Hunonic Cloud synced: %s ROL-ROI door(s)", len(self.devices)
+        )
         await self.mqtt.refresh_subscriptions()
         return flat
 
@@ -555,6 +641,8 @@ class HunonicAPIClient:
             state["position"] = 100
         elif action == 2:
             state["position"] = 0
+        if self._stopping:
+            return
         state["available"] = True
         for listener in list(self._listeners.get(did, set())):
             try:
@@ -585,11 +673,27 @@ class HunonicAPIClient:
         self.hass.async_create_task(_run())
 
     def _mqtt_connected_changed(self, connected: bool) -> None:
-        for did, listeners in self._listeners.items():
+        if self._stopping:
+            return
+        for did, listeners in list(self._listeners.items()):
+            if self._stopping:
+                return
             state = self.device_states.setdefault(did, {})
             state["available"] = bool(connected)
             for listener in list(listeners):
-                listener(state)
+                if self._stopping:
+                    return
+                try:
+                    listener(dict(state))
+                except (RuntimeError, AttributeError) as err:
+                    _LOGGER.debug(
+                        "Ignoring stale ROL-ROI entity listener for %s: %s",
+                        did, err,
+                    )
+                except Exception as err:
+                    _LOGGER.debug(
+                        "State listener failed for %s: %s", did, err
+                    )
 
     async def _send_command(self, device_id: str, action: int) -> bool:
         device = self.devices.get(str(device_id))
@@ -620,17 +724,27 @@ class HunonicAPIClient:
         return ok
 
     async def async_refresh(self) -> None:
-        try:
-            await self.get_devices()
-            if self.mqtt.connected:
-                for device_id in list(self.devices):
-                    await self.request_status(device_id)
-        except (ConfigEntryAuthFailed, ConfigEntryNotReady) as err:
-            _LOGGER.warning("Hunonic Cloud refresh failed: %s", err)
-        except Exception as err:
-            _LOGGER.warning("Hunonic Cloud refresh failed: %s", err)
+        if self._stopping or self._refresh_lock.locked():
+            return
+        async with self._refresh_lock:
+            try:
+                await self.get_devices()
+                if self.mqtt.connected and not self._stopping:
+                    for device_id in list(self.devices):
+                        if self._stopping:
+                            break
+                        await self.request_status(device_id)
+            except ConfigEntryAuthFailed:
+                _LOGGER.debug(
+                    "Hunonic Cloud authentication unavailable; retry is throttled"
+                )
+            except ConfigEntryNotReady as err:
+                _LOGGER.debug("Hunonic Cloud refresh deferred: %s", err)
+            except Exception as err:
+                _LOGGER.warning("Hunonic Cloud refresh failed: %s", err)
 
     async def start(self) -> None:
+        self._stopping = False
         await self.fetch_mqtt_server()
         if not self.mqtt_server or not self.mqtt_server.get("server"):
             raise ConfigEntryNotReady("Hunonic MQTT server could not be discovered")
@@ -642,6 +756,8 @@ class HunonicAPIClient:
         await self.async_refresh()
 
     async def stop(self) -> None:
+        self._stopping = True
+        self._listeners.clear()
         if self._unsub_refresh:
             self._unsub_refresh()
             self._unsub_refresh = None
