@@ -210,10 +210,15 @@ class HunonicMQTT:
             return
         self.connected = True
         _LOGGER.info("Hunonic MQTT connected")
+        if self.client._stopping:
+            return
         for device in self.client.devices.values():
             self._subscribe_device(device)
-        self.hass.loop.call_soon_threadsafe(self.client._mqtt_connected_changed, True)
-        self.hass.loop.call_soon_threadsafe(self.client._request_all_status)
+        if not self.client._stopping:
+            self.hass.loop.call_soon_threadsafe(
+                self.client._mqtt_connected_changed, True
+            )
+            self.hass.loop.call_soon_threadsafe(self.client._request_all_status)
 
     def _on_disconnect(self, _client, _userdata, rc, properties=None):
         self.connected = False
@@ -390,9 +395,10 @@ class HunonicAPIClient:
             }
             _LOGGER.debug(
                 "Hunonic login request phone=%s app_name=%s app_role=%s is_pro_app=%s",
-                self.phone, APP_NAME, APP_ROLE, IS_PRO_APP,
+                self.phone, APP_NAME, APP_ROLE, IS_PRO_APP
             )
 
+            # Preserve the original host order and login request exactly.
             for host in [self.api_host, "api2.hunonicpro.com"]:
                 self.api_host = host
                 self.base_url = self._base_url(host)
@@ -403,16 +409,18 @@ class HunonicAPIClient:
                     if status != 200 or not isinstance(data, dict):
                         _LOGGER.error(
                             "Hunonic login failed HTTP=%s response=%s",
-                            status, raw[:1000],
+                            status, raw[:1000]
                         )
                         continue
 
                     if data.get("status") is not True:
                         _LOGGER.error(
                             "Hunonic login rejected: message=%s error_code=%s",
-                            data.get("message"), data.get("error_code"),
+                            data.get("message"), data.get("error_code")
                         )
-                        self._auth_retry_after = loop.time() + self._session_reauth_delay
+                        self._auth_retry_after = (
+                            loop.time() + self._session_reauth_delay
+                        )
                         return False
 
                     user = data.get("data")
@@ -420,9 +428,11 @@ class HunonicAPIClient:
                     if not token:
                         _LOGGER.error(
                             "Hunonic login succeeded but token_id is missing: %s",
-                            data,
+                            data
                         )
-                        self._auth_retry_after = loop.time() + self._session_reauth_delay
+                        self._auth_retry_after = (
+                            loop.time() + self._session_reauth_delay
+                        )
                         return False
 
                     self.user = user
@@ -431,7 +441,9 @@ class HunonicAPIClient:
                     )
                     self.token_id = str(token)
                     self._auth_retry_after = 0.0
-                    _LOGGER.info("Hunonic Cloud login OK, user_id=%s", self.user_id)
+                    _LOGGER.info(
+                        "Hunonic Cloud login OK, user_id=%s", self.user_id
+                    )
                     return True
 
                 except Exception as err:
@@ -454,19 +466,23 @@ class HunonicAPIClient:
                 self.user = None
                 self.user_id = None
 
-                # Re-authenticate immediately once. Further failures are
-                # throttled by authenticate() for 60 seconds.
+                # Re-login immediately once. Failed logins are throttled for 60s.
                 if not await self.authenticate():
                     raise ConfigEntryNotReady(
                         "Hunonic session expired; re-authentication is throttled"
                     )
 
                 status, data, raw = await self._get_signed(
-                    "device/listDeviceByHome", {"token_id": self.token_id}
+                    "device/listDeviceByHome",
+                    {"token_id": self.token_id},
                 )
-                if status != 200 or not isinstance(data, dict) or data.get("status") is not True:
+                if (
+                    status != 200
+                    or not isinstance(data, dict)
+                    or data.get("status") is not True
+                ):
                     raise ConfigEntryNotReady(
-                        "Hunonic session re-authenticated but device refresh failed"
+                        "Hunonic session re-authenticated but device list refresh failed"
                     )
             else:
                 raise ConfigEntryNotReady(
@@ -664,15 +680,19 @@ class HunonicAPIClient:
                 if self._stopping:
                     return
                 try:
+                    # Keep the original state content; a shallow copy only
+                    # prevents a listener from observing concurrent mutation.
                     listener(dict(state))
                 except (RuntimeError, AttributeError) as err:
-                    # Entity may have been removed by HA during unload/reload.
+                    # HA may have already released an entity during reload/unload.
                     _LOGGER.debug(
                         "Ignoring stale ROL-ROI entity listener for %s: %s",
-                        did, err,
+                        did, err
                     )
                 except Exception as err:
-                    _LOGGER.debug("State listener failed for %s: %s", did, err)
+                    _LOGGER.debug(
+                        "State listener failed for %s: %s", did, err
+                    )
 
     async def _send_command(self, device_id: str, action: int) -> bool:
         device = self.devices.get(str(device_id))
@@ -719,9 +739,13 @@ class HunonicAPIClient:
                     "Hunonic Cloud authentication unavailable; retry is throttled"
                 )
             except ConfigEntryNotReady as err:
-                _LOGGER.debug("Hunonic Cloud refresh deferred: %s", err)
+                _LOGGER.debug(
+                    "Hunonic Cloud refresh deferred: %s", err
+                )
             except Exception as err:
-                _LOGGER.warning("Hunonic Cloud refresh failed: %s", err)
+                _LOGGER.warning(
+                    "Hunonic Cloud refresh failed: %s", err
+                )
 
     async def start(self) -> None:
         self._stopping = False
