@@ -80,17 +80,6 @@ class HunonicDoorCover(CoverEntity):
         if "available" in state:
             self._attr_available = bool(state["available"])
 
-        # Show both dimensions directly in the entity name used by the
-        # standard HA cover control UI.
-        if self._main_position is not None:
-            if self._cleft_position is None:
-                self._attr_name = f"Door — Cửa {self._main_position}%"
-            else:
-                self._attr_name = (
-                    f"Door — Cửa {self._main_position}% | "
-                    f"Ô thoáng {self._cleft_position}%"
-                )
-
         self.async_write_ha_state()
 
     @property
@@ -122,20 +111,13 @@ class HunonicDoorCover(CoverEntity):
 
     @property
     def current_cover_position(self) -> int | None:
-        """Hide HA's automatic ' · NN%' suffix in the standard UI."""
+        """Hide HA's automatic position suffix in the standard UI."""
         return None
 
     @property
     def state(self) -> str | None:
-        """Replace HA's default 'Open · N%' text with both door percentages."""
-        main = getattr(self, "_main_position", None)
-        cleft = getattr(self, "_cleft_position", None)
-
-        if main is None:
-            return None
-        if cleft is None:
-            return f"Cửa {main}%"
-        return f"Cửa {main}% | Ô thoáng {cleft}%"
+        """Use Home Assistant's normal cover state while retaining sensors."""
+        return super().state
 
     async def async_open_cover(self, **kwargs: Any) -> None:
         if self._is_locked:

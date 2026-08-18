@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from homeassistant.components.lock import LockEntity, LockEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers import entity_registry as er
 from . import DOMAIN, HunonicAPIClient
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
@@ -32,6 +34,14 @@ class HunonicDoorLock(LockEntity):
         self._attr_is_locked = None
         self._attr_available = False
         client.add_listener(device_id, self._state_changed)
+
+    async def async_added_to_hass(self) -> None:
+        """Restore visibility for entities hidden by the previous release."""
+        await super().async_added_to_hass()
+        registry = er.async_get(self.hass)
+        entry = registry.async_get(self.entity_id)
+        if entry is not None and entry.hidden_by is not None:
+            registry.async_update_entity(self.entity_id, hidden_by=None)
 
     @callback
     def _state_changed(self, state: dict[str, Any]) -> None:
@@ -64,8 +74,14 @@ class HunonicDoorLock(LockEntity):
             self.async_write_ha_state()
 
     async def async_open(self, **kwargs: Any) -> None:
+        """Open the door, unlocking it first when its MQTT state says locked."""
+        if self._attr_is_locked:
+            if not await self._client.control_device(self._device_id, "unlock"):
+                return
+            # The controller must process the unlock before it accepts open.
+            # Do not optimistically change the Lock state; MQTT confirms it.
+            await asyncio.sleep(0.5)
         if await self._client.control_device(self._device_id, "open"):
-            self._attr_is_locked = False
             self._attr_available = True
             self.async_write_ha_state()
 
