@@ -4,7 +4,8 @@ Protocol is based on the original ROL-ROI STEEL DOOR APK:
 - Cloud API is HTTPS /v3.
 - Every POST is multipart/form-data and includes the APK's signature.
 - GET requests that use getData() include the same signature in the query.
-- Device control is MQTT over WebSocket ws://<server>:8080/ws.
+- Device control is MQTT over WebSocket supplied by Hunonic's MQTT discovery
+  service. No broker credentials are embedded in this integration.
 - Door commands are JSON {"sdr": <1..5>, "u": <user_id>} encrypted with
   the AES key/IV derived from the device root_id.
 """
@@ -54,10 +55,7 @@ MQTT_INFO_ID = "HUN0987654321123456"
 MQTT_INFO_URL = f"https://infom.hunonicpro.com/v2?device_id={MQTT_INFO_ID}&dev=false"
 MQTT_INFO_KEY = "yAlaCKUYI3qr0kTd"
 MQTT_INFO_IV = "QFjnL4GVODlNB0eZ"
-DEFAULT_MQTT_HOST = "mqtt.hunonicpro.com"
 DEFAULT_MQTT_WS_PORT = 8080
-DEFAULT_MQTT_USER = "bestbug"
-DEFAULT_MQTT_PASSWORD = "bigbugdmm"
 
 DOOR_ROOT_TYPES = {
     "sdoor", "sdoor1", "sdoor2", "sdoor3", "sdoor4", "sdoor5",
@@ -183,9 +181,12 @@ class HunonicMQTT:
                 return self.connected
             try:
                 info = self.client.mqtt_server or {}
-                host = info.get("server") or DEFAULT_MQTT_HOST
-                user = info.get("user") or DEFAULT_MQTT_USER
-                password = info.get("pass") or info.get("password") or DEFAULT_MQTT_PASSWORD
+                host = info.get("server")
+                user = info.get("user")
+                password = info.get("pass") or info.get("password")
+                if not all((host, user, password)):
+                    _LOGGER.error("Hunonic MQTT discovery returned incomplete connection details")
+                    return False
                 self._mqtt = mqtt.Client(transport="websockets", protocol=mqtt.MQTTv311)
                 self._mqtt.ws_set_options(path="/ws")
                 self._mqtt.username_pw_set(str(user), str(password))
@@ -195,7 +196,7 @@ class HunonicMQTT:
                 self._mqtt.connect(host, DEFAULT_MQTT_WS_PORT, 60)
                 self._mqtt.loop_start()
                 self._started = True
-                _LOGGER.info("Hunonic MQTT connecting ws://%s:%s/ws", host, DEFAULT_MQTT_WS_PORT)
+                _LOGGER.info("Hunonic MQTT connection started")
                 return True
             except Exception as err:
                 _LOGGER.error("Hunonic MQTT start failed: %s", err)
@@ -238,7 +239,7 @@ class HunonicMQTT:
         if topic:
             result, _mid = self._mqtt.subscribe(str(topic), qos=0)
             if result != mqtt.MQTT_ERR_SUCCESS:
-                _LOGGER.error("MQTT subscribe failed rc=%s topic=%s", result, topic)
+                _LOGGER.error("MQTT subscribe failed rc=%s", result)
 
     async def refresh_subscriptions(self) -> None:
         if not self.connected:
@@ -267,19 +268,16 @@ class HunonicMQTT:
         topic = device.get("topicsub") or device.get("topicSub")
         root_id = device.get("root_id") or device.get("rootId") or device.get("id")
         if not topic or not root_id:
-            _LOGGER.error("Door MQTT fields missing: id=%s root_id=%s topicsub=%s", device.get("id"), root_id, topic)
+            _LOGGER.error("Door MQTT configuration is incomplete")
             return False
         try:
             key, iv = derive_device_key_iv(str(root_id))
             encrypted = _aes_cbc_encrypt_bytes(payload_json, key, iv)
             result = self._mqtt.publish(str(topic), encrypted, qos=0, retain=False)
             if result.rc != mqtt.MQTT_ERR_SUCCESS:
-                _LOGGER.error("MQTT publish failed rc=%s topic=%s", result.rc, topic)
+                _LOGGER.error("MQTT publish failed rc=%s", result.rc)
                 return False
-            _LOGGER.info(
-                "ROL-ROI command published: device=%s root_id=%s topic=%s payload=%s",
-                device.get("id"), root_id, topic, payload_json,
-            )
+            _LOGGER.debug("ROL-ROI command published")
             return True
         except Exception as err:
             _LOGGER.error("MQTT publish/encrypt failed: %s", err)
@@ -295,9 +293,9 @@ class HunonicMQTT:
             key, iv = derive_device_key_iv(str(root_id))
             plain = _aes_cbc_decrypt_bytes(bytes(msg.payload), key, iv).decode("utf-8")
             data = json.loads(plain)
-            _LOGGER.debug("ROL-ROI MQTT message: device=%s data=%s", device.get("id"), data)
-        except Exception as err:
-            _LOGGER.debug("Unable to decrypt door MQTT message topic=%s: %s", topic, err)
+            _LOGGER.debug("ROL-ROI MQTT message received")
+        except Exception:
+            _LOGGER.debug("Unable to decrypt door MQTT message")
             return
         self.hass.loop.call_soon_threadsafe(self.client.handle_device_message, device, data)
 
@@ -407,10 +405,7 @@ class HunonicAPIClient:
                         "user/login", params, retry=False
                     )
                     if status != 200 or not isinstance(data, dict):
-                        _LOGGER.error(
-                            "Hunonic login failed HTTP=%s response=%s",
-                            status, raw[:1000]
-                        )
+                        _LOGGER.error("Hunonic login failed HTTP=%s", status)
                         continue
 
                     if data.get("status") is not True:
@@ -426,10 +421,7 @@ class HunonicAPIClient:
                     user = data.get("data")
                     token = user.get("token_id") if isinstance(user, dict) else None
                     if not token:
-                        _LOGGER.error(
-                            "Hunonic login succeeded but token_id is missing: %s",
-                            data
-                        )
+                        _LOGGER.error("Hunonic login succeeded but token_id is missing")
                         self._auth_retry_after = (
                             loop.time() + self._session_reauth_delay
                         )
@@ -441,15 +433,11 @@ class HunonicAPIClient:
                     )
                     self.token_id = str(token)
                     self._auth_retry_after = 0.0
-                    _LOGGER.info(
-                        "Hunonic Cloud login OK, user_id=%s", self.user_id
-                    )
+                    _LOGGER.info("Hunonic Cloud login OK")
                     return True
 
                 except Exception as err:
-                    _LOGGER.warning(
-                        "Hunonic login request to %s failed: %s", host, err
-                    )
+                    _LOGGER.warning("Hunonic login request failed")
 
             self._auth_retry_after = loop.time() + self._session_reauth_delay
             return False
@@ -459,7 +447,7 @@ class HunonicAPIClient:
             raise ConfigEntryAuthFailed("Unable to authenticate with Hunonic")
         status, data, raw = await self._get_signed("device/listDeviceByHome", {"token_id": self.token_id})
         if status != 200 or not isinstance(data, dict):
-            raise ConfigEntryNotReady(f"Hunonic device list HTTP {status}: {raw[:500]}")
+            raise ConfigEntryNotReady(f"Hunonic device list HTTP {status}")
         if data.get("status") is not True:
             if data.get("error_code") == 40:
                 self.token_id = None
@@ -525,18 +513,11 @@ class HunonicAPIClient:
                 info = _decode_mqtt_info(str(encrypted))
                 if info and info.get("server"):
                     self.mqtt_server = info
-                    _LOGGER.info("Hunonic MQTT server discovered: %s", info.get("server"))
+                    _LOGGER.info("Hunonic MQTT server discovered")
                     return
-        except Exception as err:
-            _LOGGER.warning("Hunonic MQTT server discovery failed: %s", err)
-        # APK also ships a default credential set. WebSocket control still uses :8080/ws.
-        self.mqtt_server = {
-            "server": DEFAULT_MQTT_HOST,
-            "port": 1883,
-            "user": DEFAULT_MQTT_USER,
-            "pass": DEFAULT_MQTT_PASSWORD,
-        }
-        _LOGGER.warning("Using APK fallback MQTT server %s", DEFAULT_MQTT_HOST)
+        except Exception:
+            _LOGGER.warning("Hunonic MQTT server discovery failed")
+        self.mqtt_server = None
 
     def device_by_topic(self, topic: str) -> dict[str, Any] | None:
         for d in self.devices.values():
